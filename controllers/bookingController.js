@@ -14,22 +14,20 @@ exports.createBooking = async (req, res) => {
 
     let discountAmount = 0;
     let couponApplied = null;
+    let targetClaim = null;
 
     if (couponClaimId) {
-      const claim = await CouponClaim.findById(couponClaimId).populate('coupon');
-      if (claim && !claim.isClaimed && claim.user.toString() === req.user._id.toString()) {
-        const coupon = claim.coupon;
+      targetClaim = await CouponClaim.findById(couponClaimId).populate('coupon');
+      if (targetClaim && !targetClaim.usedInBooking && targetClaim.user.toString() === req.user._id.toString()) {
+        const coupon = targetClaim.coupon;
         const now = new Date();
-        if (new Date(coupon.expiryDate) > now) {
+        if (coupon && new Date(coupon.expiryDate) > now) {
           if (coupon.discountType === 'percentage') {
             discountAmount = (trip.price * passengers.length * coupon.discountValue) / 100;
           } else if (coupon.discountType === 'fixed') {
             discountAmount = coupon.discountValue;
           }
           couponApplied = coupon._id;
-          claim.isClaimed = true;
-          claim.claimedAt = new Date();
-          await claim.save();
         }
       }
     }
@@ -58,6 +56,14 @@ exports.createBooking = async (req, res) => {
     });
 
     await booking.save();
+
+    // Mark the coupon claim as USED in this booking!
+    if (targetClaim) {
+      targetClaim.usedInBooking = booking._id;
+      targetClaim.isClaimed = true;
+      targetClaim.claimedAt = new Date();
+      await targetClaim.save();
+    }
 
     const qrData = JSON.stringify({ ticketId: booking.ticketId, trip: trip.name, user: req.user.name, finalPrice });
     booking.qrCode = await QRCode.toDataURL(qrData);
