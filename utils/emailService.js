@@ -6,6 +6,7 @@ let etherealTransporter = null;
 // Initialize or get transporter
 const getTransporter = async () => {
   if (process.env.EMAIL_PASS) {
+    const sanitizedPass = process.env.EMAIL_PASS.replace(/\s+/g, '');
     return nodemailer.createTransport({
       service: 'gmail',
       host: process.env.EMAIL_HOST || 'smtp.gmail.com',
@@ -13,11 +14,11 @@ const getTransporter = async () => {
       secure: process.env.EMAIL_SECURE === 'true',
       auth: {
         user: process.env.EMAIL_USER || OWNER_EMAIL,
-        pass: process.env.EMAIL_PASS,
+        pass: sanitizedPass,
       },
-      connectionTimeout: 3000,
-      greetingTimeout: 3000,
-      socketTimeout: 3000
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 5000
     });
   }
 
@@ -57,9 +58,9 @@ const sendMail = async ({ to, subject, html }) => {
 
   const timeoutPromise = new Promise((resolve) => {
     setTimeout(() => {
-      console.log(`⏰ Email dispatch completed (fast timeout 2.5s) for ${destinationEmail}`);
+      console.log(`⏰ Email dispatch completed (fast timeout 3s) for ${destinationEmail}`);
       resolve({ success: false, timedOut: true });
-    }, 2500);
+    }, 3000);
   });
 
   const sendPromise = (async () => {
@@ -118,7 +119,7 @@ exports.sendWelcomeEmail = async (user, coupons = []) => {
         ${couponsHtml}
 
         <div style="text-align: center; margin-top: 32px;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/coupons" style="background-color: #2563eb; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">View & Use Your Coupons</a>
+          <a href="${process.env.FRONTEND_URL || 'https://trip-booking-cappsra-air-trips-fron.vercel.app'}/coupons" style="background-color: #2563eb; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">View & Use Your Coupons</a>
         </div>
       </div>
 
@@ -205,7 +206,7 @@ exports.sendFestivalBonusEmail = async (user, festivalName, coupons = []) => {
         ${couponsHtml}
 
         <div style="text-align: center; margin-top: 32px;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/coupons" style="background-color: #059669; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Claim & Redeem Now</a>
+          <a href="${process.env.FRONTEND_URL || 'https://trip-booking-cappsra-air-trips-fron.vercel.app'}/coupons" style="background-color: #059669; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Claim & Redeem Now</a>
         </div>
       </div>
 
@@ -250,7 +251,7 @@ exports.sendSubscriptionEmail = async (user, subscriptionName, amount, coupons =
         ${couponsHtml}
 
         <div style="text-align: center; margin-top: 32px;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/coupons" style="background-color: #7c3aed; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Access Coupon Locker</a>
+          <a href="${process.env.FRONTEND_URL || 'https://trip-booking-cappsra-air-trips-fron.vercel.app'}/coupons" style="background-color: #7c3aed; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Access Coupon Locker</a>
         </div>
       </div>
 
