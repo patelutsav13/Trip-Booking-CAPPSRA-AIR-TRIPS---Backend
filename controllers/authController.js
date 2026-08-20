@@ -7,16 +7,13 @@ const { sendWelcomeEmail, sendResetPasswordEmail } = require('../utils/emailServ
 
 const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET || 'secret123', { expiresIn: '7d' });
 
-// Helper to assign 3 initial free coupons and send welcome email
+// Helper to assign 3 initial free coupons and send welcome email (non-blocking)
 const assignInitialFreeCoupons = async (user) => {
   try {
     const existingClaimsCount = await CouponClaim.countDocuments({ user: user._id });
     if (existingClaimsCount > 0) return []; // Already initialized
 
-    // Find initial seed coupons (e.g., SAVE10, SAVE20, SAVE30 or first 3 active coupons)
     let initialCoupons = await Coupon.find({ isActive: true }).limit(3);
-    
-    // If not enough coupons in DB, fallback to active coupons
     if (initialCoupons.length < 3) {
       initialCoupons = await Coupon.find().limit(3);
     }
@@ -34,8 +31,8 @@ const assignInitialFreeCoupons = async (user) => {
       assignedCoupons.push(coupon);
     }
 
-    // Send Welcome Email via Nodemailer
-    await sendWelcomeEmail(user, assignedCoupons);
+    // Fire & Forget email dispatch (non-blocking)
+    sendWelcomeEmail(user, assignedCoupons).catch(err => console.error('Background welcome email error:', err));
     return assignedCoupons;
   } catch (err) {
     console.error('Error assigning initial coupons:', err);
@@ -51,7 +48,7 @@ exports.register = async (req, res) => {
 
     const user = await User.create({ name, email: email.toLowerCase(), password, phone });
     
-    // Award 3 free initial coupons and send welcome email
+    // Award 3 free initial coupons (non-blocking email)
     await assignInitialFreeCoupons(user);
 
     const token = generateToken(user._id);
@@ -70,7 +67,6 @@ exports.login = async (req, res) => {
     if (!user || !(await user.matchPassword(password)))
       return res.status(401).json({ message: 'Invalid email or password' });
 
-    // Ensure initial coupons exist if user registers for first time
     const claimsCount = await CouponClaim.countDocuments({ user: user._id });
     if (claimsCount === 0) {
       await assignInitialFreeCoupons(user);
@@ -95,7 +91,6 @@ exports.googleAuth = async (req, res) => {
     let isNewUser = false;
 
     if (!user) {
-      // Create user with Google profile details
       isNewUser = true;
       const randomPassword = crypto.randomBytes(16).toString('hex');
       user = await User.create({
@@ -111,7 +106,6 @@ exports.googleAuth = async (req, res) => {
       await user.save();
     }
 
-    // Award 3 free initial coupons and send welcome email if new user or has no claims
     const claimsCount = await CouponClaim.countDocuments({ user: user._id });
     if (isNewUser || claimsCount === 0) {
       await assignInitialFreeCoupons(user);
@@ -136,7 +130,6 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({ message: 'No account registered with this email address' });
     }
 
-    // Generate random reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
@@ -147,7 +140,8 @@ exports.forgotPassword = async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
 
-    const emailResult = await sendResetPasswordEmail(user, resetUrl);
+    // Non-blocking fire-and-forget email dispatch
+    sendResetPasswordEmail(user, resetUrl).catch(err => console.error('Background reset email error:', err));
 
     res.json({
       message: 'Password reset link has been sent to your email address.',
@@ -179,7 +173,6 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ message: 'Invalid or expired password reset token' });
     }
 
-    // Update password
     user.password = password;
     user.resetPasswordToken = '';
     user.resetPasswordExpire = null;

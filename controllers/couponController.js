@@ -6,7 +6,7 @@ const { sendFestivalBonusEmail, sendSubscriptionEmail } = require('../utils/emai
 
 exports.getAllCoupons = async (req, res) => {
   try {
-    const coupons = await Coupon.find().sort({ createdAt: -1 });
+    const coupons = await Coupon.find().lean().sort({ createdAt: -1 });
     res.json(coupons);
   } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -40,10 +40,9 @@ exports.sendCouponToUser = async (req, res) => {
   try {
     const { userId } = req.body;
     const couponId = req.params.id;
-    // User must have at least one booking
     const hasBooking = await Booking.findOne({ user: userId, paymentStatus: 'confirmed' });
     if (!hasBooking) return res.status(400).json({ message: 'User must have at least one booking to receive a coupon' });
-    // Check if already sent
+    
     const existing = await CouponClaim.findOne({ user: userId, coupon: couponId });
     if (existing) return res.status(400).json({ message: 'Coupon already sent to this user' });
     const claim = await CouponClaim.create({ user: userId, coupon: couponId, sentByAdmin: true, claimSource: 'admin' });
@@ -56,6 +55,7 @@ exports.getMyCoupons = async (req, res) => {
   try {
     const claims = await CouponClaim.find({ user: req.user._id })
       .populate('coupon')
+      .lean()
       .sort({ createdAt: -1 });
     res.json(claims);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -67,6 +67,7 @@ exports.getAllCouponClaims = async (req, res) => {
     const claims = await CouponClaim.find()
       .populate('user', 'name email')
       .populate('coupon', 'title code discountType discountValue')
+      .lean()
       .sort({ createdAt: -1 });
     res.json(claims);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -77,9 +78,8 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
   try {
     const userId = req.user._id;
     const user = await User.findById(userId);
-    const { festivalType } = req.body; // 'diwali', 'winter', 'summer' or auto check
+    const { festivalType } = req.body;
 
-    // Get current user claims (unused ones to avoid duplication)
     const activeUserClaims = await CouponClaim.find({
       user: userId,
       usedInBooking: null
@@ -91,7 +91,6 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
     let selectedFestival = festivalType || 'diwali';
     let claimSourceKey = `festival_${selectedFestival}`;
 
-    // Check if user already claimed this specific festival bonus this year
     const startOfYear = new Date(currentYear, 0, 1);
     const alreadyClaimedFestivalThisYear = await CouponClaim.findOne({
       user: userId,
@@ -101,22 +100,17 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
 
     if (alreadyClaimedFestivalThisYear) {
       return res.status(400).json({
-        message: `You have already claimed your ${selectedFestival.toUpperCase()} bonus coupons for ${currentYear}. Spend your current coupons to qualify for future bonuses!`
+        message: `You have already claimed your ${selectedFestival.toUpperCase()} bonus coupons for ${currentYear}. Use your current coupons to qualify for future bonuses!`
       });
     }
 
-    // Find all active available coupons in DB
     const allCoupons = await Coupon.find({ isActive: true });
-    
-    // Filter out coupons that user ALREADY holds unused
-    const availableForUser = allCoupons.filter(c => !unusedCouponIds.has(c._id.toString()));
+    let availableForUser = allCoupons.filter(c => !unusedCouponIds.has(c._id.toString()));
 
     if (availableForUser.length < 2) {
-      // If user holds almost all, pick from total coupons fallback
       availableForUser.push(...allCoupons);
     }
 
-    // Shuffle and pick 2 distinct coupons
     const shuffled = [...availableForUser].sort(() => 0.5 - Math.random());
     const awardedCoupons = [];
     const uniqueIds = new Set();
@@ -125,7 +119,7 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
       if (uniqueIds.has(coupon._id.toString())) continue;
       uniqueIds.add(coupon._id.toString());
       
-      const claim = await CouponClaim.create({
+      await CouponClaim.create({
         user: userId,
         coupon: coupon._id,
         claimSource: claimSourceKey,
@@ -136,17 +130,18 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
       if (awardedCoupons.length >= 2) break;
     }
 
-    // Send Festival Email Notification via Nodemailer
     const festivalNamesMap = {
       diwali: 'Diwali Festival',
       winter: 'Winter Vacation / New Year',
       summer: 'Summer Vacation'
     };
     const festivalDisplayName = festivalNamesMap[selectedFestival] || 'Vacation Bonus';
-    await sendFestivalBonusEmail(user, festivalDisplayName, awardedCoupons);
+    
+    // Non-blocking fire-and-forget email notification
+    sendFestivalBonusEmail(user, festivalDisplayName, awardedCoupons).catch(err => console.error('Background festival email error:', err));
 
     res.json({
-      message: `🎉 Congratulations! 2 ${festivalDisplayName} Bonus Coupons awarded and email sent!`,
+      message: `🎉 Congratulations! 2 ${festivalDisplayName} Bonus Coupons awarded!`,
       coupons: awardedCoupons
     });
   } catch (err) {
@@ -157,7 +152,7 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
 // Subscribe to Coupon Package (6-Month ₹5000 / Yearly ₹8000)
 exports.subscribeCouponPackage = async (req, res) => {
   try {
-    const { packageType, paymentMethod } = req.body; // '6months' or 'yearly'
+    const { packageType, paymentMethod } = req.body;
     const userId = req.user._id;
     const user = await User.findById(userId);
 
@@ -167,13 +162,10 @@ exports.subscribeCouponPackage = async (req, res) => {
     const subscriptionTitle = is6Month ? '6-Month Trip Coupon Subscription Package (₹5000)' : 'Yearly Trip Coupon Subscription Package (₹8000)';
     const sourceKey = is6Month ? 'subscription_6m' : 'subscription_1y';
 
-    // Target Codes for subscription packages
     const targetCodes6M = ['SAVE10', 'SAVE20', 'SAVE30', 'FREEFOOD', 'FREEHOTEL'];
     const targetCodes1Y = ['SAVE10', 'SAVE20', 'SAVE30', 'HALFPRICE', 'FREEFOOD', 'FREEHOTEL', 'FREETRANS', 'FREEBKFST'];
-
     const targetCodes = is6Month ? targetCodes6M : targetCodes1Y;
 
-    // Find target coupons by codes or active coupons pool
     let coupons = await Coupon.find({ code: { $in: targetCodes } });
     if (coupons.length < countNeeded) {
       const remainingCoupons = await Coupon.find({ _id: { $nin: coupons.map(c => c._id) } }).limit(countNeeded - coupons.length);
@@ -192,8 +184,8 @@ exports.subscribeCouponPackage = async (req, res) => {
       awardedCoupons.push(coupon);
     }
 
-    // Send Nodemailer Subscription Confirmation Email
-    await sendSubscriptionEmail(user, subscriptionTitle, amount, awardedCoupons);
+    // Non-blocking fire-and-forget email dispatch
+    sendSubscriptionEmail(user, subscriptionTitle, amount, awardedCoupons).catch(err => console.error('Background subscription email error:', err));
 
     res.json({
       success: true,

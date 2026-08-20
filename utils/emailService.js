@@ -1,46 +1,63 @@
 const nodemailer = require('nodemailer');
 
-// Configure Transporter (Support custom SMTP via ENV or fallback test transporter)
-const createTransporter = () => {
-  if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
-    return nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT || 587,
-      secure: process.env.EMAIL_SECURE === 'true',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-  }
+// Fallback user specified by owner for notifications
+const OWNER_EMAIL = 'patelutsav312@gmail.com';
 
-  // Fallback Ethereal / standard SMTP test configuration
+const createTransporter = () => {
   return nodemailer.createTransport({
     service: 'gmail',
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.EMAIL_PORT || '587'),
+    secure: process.env.EMAIL_SECURE === 'true',
     auth: {
-      user: process.env.EMAIL_USER || 'cappsra.air.trips@gmail.com',
-      pass: process.env.EMAIL_PASS || 'demo_app_password_123'
-    }
+      user: process.env.EMAIL_USER || OWNER_EMAIL,
+      pass: process.env.EMAIL_PASS || '',
+    },
+    // Prevent long hanging sockets
+    connectionTimeout: 3000,
+    greetingTimeout: 3000,
+    socketTimeout: 3000
   });
 };
 
+// Send mail with strict timeout race so API calls never hang!
 const sendMail = async ({ to, subject, html }) => {
-  try {
-    const transporter = createTransporter();
-    const mailOptions = {
-      from: `"Cappsra Air Trips" <${process.env.EMAIL_USER || 'no-reply@cappsra-airtrips.com'}>`,
-      to,
-      subject,
-      html,
-    };
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✉️ Email sent successfully to ${to} [MessageId: ${info.messageId}]`);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error(`❌ Email send error to ${to}:`, error.message);
-    // Return graceful status so app flow does not crash if SMTP credentials aren't set in dev
-    return { success: false, error: error.message };
-  }
+  // Check if destination is fake/temp domain
+  const isFakeEmail = !to || to.includes('@example.com') || to.includes('@test.com') || to.includes('@fake') || to.includes('temp');
+  const destinationEmail = isFakeEmail ? OWNER_EMAIL : to;
+
+  const mailOptions = {
+    from: `"Cappsra Air Trips" <${process.env.EMAIL_USER || OWNER_EMAIL}>`,
+    to: destinationEmail,
+    subject,
+    html,
+  };
+
+  // Fast timeout promise race (2.5s max wait)
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => {
+      console.log(`⏰ Email send timeout (2.5s limit reached) for ${destinationEmail} - resolving gracefully.`);
+      resolve({ success: false, timedOut: true });
+    }, 2500);
+  });
+
+  const sendPromise = (async () => {
+    try {
+      if (!process.env.EMAIL_PASS) {
+        console.log(`ℹ️ EMAIL_PASS not configured in ENV. Simulated email sent to ${destinationEmail}.`);
+        return { success: true, simulated: true };
+      }
+      const transporter = createTransporter();
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`✉️ Email sent to ${destinationEmail} [Id: ${info.messageId}]`);
+      return { success: true, messageId: info.messageId };
+    } catch (error) {
+      console.error(`❌ Nodemailer error to ${destinationEmail}:`, error.message);
+      return { success: false, error: error.message };
+    }
+  })();
+
+  return Promise.race([sendPromise, timeoutPromise]);
 };
 
 // 1. Welcome Email with 3 Free Coupons
@@ -58,7 +75,7 @@ exports.sendWelcomeEmail = async (user, coupons = []) => {
   const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f8fafc; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
       <div style="background: linear-gradient(135deg, #0f172a, #1e3a8a); padding: 30px; text-align: center; color: white;">
-        <h1 style="margin: 0; font-size: 28px; font-weight: 800; tracking-spacing: 1px;">✈️ CAPPSRA AIR TRIPS</h1>
+        <h1 style="margin: 0; font-size: 28px; font-weight: 800;">✈️ CAPPSRA AIR TRIPS</h1>
         <p style="margin: 8px 0 0 0; color: #93c5fd; font-size: 16px;">Discover • Plan • Go</p>
       </div>
       
