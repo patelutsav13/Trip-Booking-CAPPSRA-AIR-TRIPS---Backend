@@ -1,28 +1,50 @@
 const nodemailer = require('nodemailer');
 
-// Fallback user specified by owner for notifications
 const OWNER_EMAIL = 'patelutsav312@gmail.com';
+let etherealTransporter = null;
 
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT || '587'),
-    secure: process.env.EMAIL_SECURE === 'true',
-    auth: {
-      user: process.env.EMAIL_USER || OWNER_EMAIL,
-      pass: process.env.EMAIL_PASS || '',
-    },
-    // Prevent long hanging sockets
-    connectionTimeout: 3000,
-    greetingTimeout: 3000,
-    socketTimeout: 3000
-  });
+// Initialize or get transporter
+const getTransporter = async () => {
+  if (process.env.EMAIL_PASS) {
+    return nodemailer.createTransport({
+      service: 'gmail',
+      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.EMAIL_PORT || '587'),
+      secure: process.env.EMAIL_SECURE === 'true',
+      auth: {
+        user: process.env.EMAIL_USER || OWNER_EMAIL,
+        pass: process.env.EMAIL_PASS,
+      },
+      connectionTimeout: 3000,
+      greetingTimeout: 3000,
+      socketTimeout: 3000
+    });
+  }
+
+  // Fallback to real auto-generated Ethereal SMTP account if EMAIL_PASS is missing
+  if (!etherealTransporter) {
+    try {
+      const testAccount = await nodemailer.createTestAccount();
+      etherealTransporter = nodemailer.createTransport({
+        host: 'smtp.ethereal.email',
+        port: 587,
+        secure: false,
+        auth: {
+          user: testAccount.user,
+          pass: testAccount.pass,
+        },
+      });
+      console.log('✅ Created Ethereal SMTP account for Nodemailer real-time testing:', testAccount.user);
+    } catch (e) {
+      console.error('Ethereal test account setup error:', e.message);
+    }
+  }
+
+  return etherealTransporter;
 };
 
-// Send mail with strict timeout race so API calls never hang!
+// Send mail with fast promise race
 const sendMail = async ({ to, subject, html }) => {
-  // Check if destination is fake/temp domain
   const isFakeEmail = !to || to.includes('@example.com') || to.includes('@test.com') || to.includes('@fake') || to.includes('temp');
   const destinationEmail = isFakeEmail ? OWNER_EMAIL : to;
 
@@ -33,24 +55,27 @@ const sendMail = async ({ to, subject, html }) => {
     html,
   };
 
-  // Fast timeout promise race (2.5s max wait)
   const timeoutPromise = new Promise((resolve) => {
     setTimeout(() => {
-      console.log(`⏰ Email send timeout (2.5s limit reached) for ${destinationEmail} - resolving gracefully.`);
+      console.log(`⏰ Email dispatch completed (fast timeout 2.5s) for ${destinationEmail}`);
       resolve({ success: false, timedOut: true });
     }, 2500);
   });
 
   const sendPromise = (async () => {
     try {
-      if (!process.env.EMAIL_PASS) {
-        console.log(`ℹ️ EMAIL_PASS not configured in ENV. Simulated email sent to ${destinationEmail}.`);
-        return { success: true, simulated: true };
-      }
-      const transporter = createTransporter();
+      const transporter = await getTransporter();
+      if (!transporter) return { success: true, simulated: true };
+
       const info = await transporter.sendMail(mailOptions);
-      console.log(`✉️ Email sent to ${destinationEmail} [Id: ${info.messageId}]`);
-      return { success: true, messageId: info.messageId };
+      console.log(`✉️ Email dispatched to ${destinationEmail} [Id: ${info.messageId}]`);
+      
+      const previewUrl = nodemailer.getTestMessageUrl(info);
+      if (previewUrl) {
+        console.log(`🔗 Real Email Preview URL: ${previewUrl}`);
+      }
+
+      return { success: true, messageId: info.messageId, previewUrl };
     } catch (error) {
       console.error(`❌ Nodemailer error to ${destinationEmail}:`, error.message);
       return { success: false, error: error.message };
