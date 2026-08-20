@@ -25,13 +25,14 @@ const assignInitialFreeCoupons = async (user) => {
         coupon: coupon._id,
         claimSource: 'signup',
         sentByAdmin: true,
-        isClaimed: true,
+        isClaimed: false, // Available & Active in Locker!
+        usedInBooking: null,
         claimedAt: new Date()
       });
       assignedCoupons.push(coupon);
     }
 
-    // Fire & Forget email dispatch (non-blocking)
+    // Fire & Forget email dispatch
     sendWelcomeEmail(user, assignedCoupons).catch(err => console.error('Background welcome email error:', err));
     return assignedCoupons;
   } catch (err) {
@@ -47,8 +48,6 @@ exports.register = async (req, res) => {
     if (exists) return res.status(400).json({ message: 'User already exists with this email address' });
 
     const user = await User.create({ name, email: email.toLowerCase(), password, phone });
-    
-    // Award 3 free initial coupons (non-blocking email)
     await assignInitialFreeCoupons(user);
 
     const token = generateToken(user._id);
@@ -140,7 +139,6 @@ exports.forgotPassword = async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
 
-    // Non-blocking fire-and-forget email dispatch
     sendResetPasswordEmail(user, resetUrl).catch(err => console.error('Background reset email error:', err));
 
     res.json({

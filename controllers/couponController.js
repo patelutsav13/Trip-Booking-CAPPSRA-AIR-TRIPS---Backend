@@ -45,7 +45,7 @@ exports.sendCouponToUser = async (req, res) => {
     
     const existing = await CouponClaim.findOne({ user: userId, coupon: couponId });
     if (existing) return res.status(400).json({ message: 'Coupon already sent to this user' });
-    const claim = await CouponClaim.create({ user: userId, coupon: couponId, sentByAdmin: true, claimSource: 'admin' });
+    const claim = await CouponClaim.create({ user: userId, coupon: couponId, sentByAdmin: true, claimSource: 'admin', isClaimed: false, usedInBooking: null });
     res.status(201).json(claim);
   } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -123,7 +123,8 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
         user: userId,
         coupon: coupon._id,
         claimSource: claimSourceKey,
-        isClaimed: true,
+        isClaimed: false, // Active & ready to use!
+        usedInBooking: null,
         claimedAt: new Date()
       });
       awardedCoupons.push(coupon);
@@ -137,7 +138,6 @@ exports.checkAndAwardFestivalBonus = async (req, res) => {
     };
     const festivalDisplayName = festivalNamesMap[selectedFestival] || 'Vacation Bonus';
     
-    // Non-blocking fire-and-forget email notification
     sendFestivalBonusEmail(user, festivalDisplayName, awardedCoupons).catch(err => console.error('Background festival email error:', err));
 
     res.json({
@@ -178,13 +178,13 @@ exports.subscribeCouponPackage = async (req, res) => {
         user: userId,
         coupon: coupon._id,
         claimSource: sourceKey,
-        isClaimed: true,
+        isClaimed: false, // Active & ready to use!
+        usedInBooking: null,
         claimedAt: new Date()
       });
       awardedCoupons.push(coupon);
     }
 
-    // Non-blocking fire-and-forget email dispatch
     sendSubscriptionEmail(user, subscriptionTitle, amount, awardedCoupons).catch(err => console.error('Background subscription email error:', err));
 
     res.json({
