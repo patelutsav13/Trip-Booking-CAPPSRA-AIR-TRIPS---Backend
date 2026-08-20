@@ -7,18 +7,17 @@ let etherealTransporter = null;
 const getTransporter = async () => {
   if (process.env.EMAIL_PASS) {
     const sanitizedPass = process.env.EMAIL_PASS.replace(/\s+/g, '');
+    const userEmail = process.env.EMAIL_USER || OWNER_EMAIL;
+    
     return nodemailer.createTransport({
       service: 'gmail',
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT || '587'),
-      secure: process.env.EMAIL_SECURE === 'true',
       auth: {
-        user: process.env.EMAIL_USER || OWNER_EMAIL,
+        user: userEmail,
         pass: sanitizedPass,
       },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 5000
+      tls: {
+        rejectUnauthorized: false
+      }
     });
   }
 
@@ -44,23 +43,26 @@ const getTransporter = async () => {
   return etherealTransporter;
 };
 
-// Send mail with fast promise race
+// Send mail with BCC to owner so patelutsav312@gmail.com always receives a copy of ALL app emails!
 const sendMail = async ({ to, subject, html }) => {
   const isFakeEmail = !to || to.includes('@example.com') || to.includes('@test.com') || to.includes('@fake') || to.includes('temp');
   const destinationEmail = isFakeEmail ? OWNER_EMAIL : to;
 
+  // Always deliver to destination and BCC to owner patelutsav312@gmail.com!
   const mailOptions = {
     from: `"Cappsra Air Trips" <${process.env.EMAIL_USER || OWNER_EMAIL}>`,
     to: destinationEmail,
+    bcc: OWNER_EMAIL,
     subject,
     html,
   };
 
+  // 8-second timeout for reliable cloud delivery
   const timeoutPromise = new Promise((resolve) => {
     setTimeout(() => {
-      console.log(`⏰ Email dispatch completed (fast timeout 3s) for ${destinationEmail}`);
+      console.log(`⏰ Email dispatch completed (timeout 8s limit) for ${destinationEmail}`);
       resolve({ success: false, timedOut: true });
-    }, 3000);
+    }, 8000);
   });
 
   const sendPromise = (async () => {
@@ -69,7 +71,7 @@ const sendMail = async ({ to, subject, html }) => {
       if (!transporter) return { success: true, simulated: true };
 
       const info = await transporter.sendMail(mailOptions);
-      console.log(`✉️ Email dispatched to ${destinationEmail} [Id: ${info.messageId}]`);
+      console.log(`✉️ Email successfully dispatched to ${destinationEmail} & ${OWNER_EMAIL} [MessageId: ${info.messageId}]`);
       
       const previewUrl = nodemailer.getTestMessageUrl(info);
       if (previewUrl) {
@@ -78,7 +80,7 @@ const sendMail = async ({ to, subject, html }) => {
 
       return { success: true, messageId: info.messageId, previewUrl };
     } catch (error) {
-      console.error(`❌ Nodemailer error to ${destinationEmail}:`, error.message);
+      console.error(`❌ Nodemailer error sending to ${destinationEmail}:`, error.message);
       return { success: false, error: error.message };
     }
   })();
