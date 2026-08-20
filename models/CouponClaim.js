@@ -7,6 +7,7 @@ const couponClaimSchema = new mongoose.Schema({
   claimedAt: { type: Date, default: null },
   isClaimed: { type: Boolean, default: false },
   usedInBooking: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking', default: null },
+  claimSource: { type: String, enum: ['signup', 'festival_diwali', 'festival_winter', 'festival_summer', 'subscription_6m', 'subscription_1y', 'admin'], default: 'signup' },
   sentAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 

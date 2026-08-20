@@ -1,5 +1,15 @@
 const express = require('express');
-const { getAllCoupons, createCoupon, updateCoupon, deleteCoupon, sendCouponToUser, getMyCoupons, getAllCouponClaims } = require('../controllers/couponController');
+const { 
+  getAllCoupons, 
+  createCoupon, 
+  updateCoupon, 
+  deleteCoupon, 
+  sendCouponToUser, 
+  getMyCoupons, 
+  getAllCouponClaims,
+  checkAndAwardFestivalBonus,
+  subscribeCouponPackage 
+} = require('../controllers/couponController');
 const { protect, adminOnly } = require('../middleware/auth');
 const router = express.Router();
 
@@ -14,6 +24,8 @@ router.use(protect);
 
 // User routes
 router.get('/mycoupons', getMyCoupons);
+router.post('/festival-bonus', checkAndAwardFestivalBonus);
+router.post('/subscribe', subscribeCouponPackage);
 
 // Admin routes
 router.use(adminOnly);

@@ -10,6 +10,9 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String, default: '' },
   city: { type: String, default: '' },
   country: { type: String, default: '' },
+  googleId: { type: String, default: '' },
+  resetPasswordToken: { type: String, default: '' },
+  resetPasswordExpire: { type: Date, default: null },
 }, { timestamps: true });
 
 userSchema.pre('save', async function () {

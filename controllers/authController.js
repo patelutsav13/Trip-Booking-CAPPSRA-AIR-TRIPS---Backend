@@ -1,14 +1,59 @@
 const User = require('../models/User');
+const Coupon = require('../models/Coupon');
+const CouponClaim = require('../models/CouponClaim');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { sendWelcomeEmail, sendResetPasswordEmail } = require('../utils/emailService');
 
-const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET || 'secret123', { expiresIn: '7d' });
+
+// Helper to assign 3 initial free coupons and send welcome email
+const assignInitialFreeCoupons = async (user) => {
+  try {
+    const existingClaimsCount = await CouponClaim.countDocuments({ user: user._id });
+    if (existingClaimsCount > 0) return []; // Already initialized
+
+    // Find initial seed coupons (e.g., SAVE10, SAVE20, SAVE30 or first 3 active coupons)
+    let initialCoupons = await Coupon.find({ isActive: true }).limit(3);
+    
+    // If not enough coupons in DB, fallback to active coupons
+    if (initialCoupons.length < 3) {
+      initialCoupons = await Coupon.find().limit(3);
+    }
+
+    const assignedCoupons = [];
+    for (const coupon of initialCoupons) {
+      await CouponClaim.create({
+        user: user._id,
+        coupon: coupon._id,
+        claimSource: 'signup',
+        sentByAdmin: true,
+        isClaimed: true,
+        claimedAt: new Date()
+      });
+      assignedCoupons.push(coupon);
+    }
+
+    // Send Welcome Email via Nodemailer
+    await sendWelcomeEmail(user, assignedCoupons);
+    return assignedCoupons;
+  } catch (err) {
+    console.error('Error assigning initial coupons:', err);
+    return [];
+  }
+};
 
 exports.register = async (req, res) => {
   try {
     const { name, email, password, phone } = req.body;
-    const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ message: 'User already exists' });
-    const user = await User.create({ name, email, password, phone });
+    const exists = await User.findOne({ email: email.toLowerCase() });
+    if (exists) return res.status(400).json({ message: 'User already exists with this email address' });
+
+    const user = await User.create({ name, email: email.toLowerCase(), password, phone });
+    
+    // Award 3 free initial coupons and send welcome email
+    await assignInitialFreeCoupons(user);
+
     const token = generateToken(user._id);
     res.status(201).json({
       token, user: { _id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar }
@@ -21,13 +66,126 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user || !(await user.matchPassword(password)))
       return res.status(401).json({ message: 'Invalid email or password' });
+
+    // Ensure initial coupons exist if user registers for first time
+    const claimsCount = await CouponClaim.countDocuments({ user: user._id });
+    if (claimsCount === 0) {
+      await assignInitialFreeCoupons(user);
+    }
+
     const token = generateToken(user._id);
     res.json({
       token, user: { _id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar }
     });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Google OAuth Login / Continue with Google
+exports.googleAuth = async (req, res) => {
+  try {
+    const { email, name, googleId, avatar } = req.body;
+    if (!email) return res.status(400).json({ message: 'Google email is required' });
+
+    let user = await User.findOne({ email: email.toLowerCase() });
+    let isNewUser = false;
+
+    if (!user) {
+      // Create user with Google profile details
+      isNewUser = true;
+      const randomPassword = crypto.randomBytes(16).toString('hex');
+      user = await User.create({
+        name: name || email.split('@')[0],
+        email: email.toLowerCase(),
+        password: randomPassword,
+        googleId: googleId || `google_${Date.now()}`,
+        avatar: avatar || ''
+      });
+    } else if (!user.googleId) {
+      user.googleId = googleId || `google_${Date.now()}`;
+      if (avatar && !user.avatar) user.avatar = avatar;
+      await user.save();
+    }
+
+    // Award 3 free initial coupons and send welcome email if new user or has no claims
+    const claimsCount = await CouponClaim.countDocuments({ user: user._id });
+    if (isNewUser || claimsCount === 0) {
+      await assignInitialFreeCoupons(user);
+    }
+
+    const token = generateToken(user._id);
+    res.json({
+      token,
+      user: { _id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar }
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Forgot Password - Send Reset Email Link
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'No account registered with this email address' });
+    }
+
+    // Generate random reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpire = Date.now() + 60 * 60 * 1000; // Valid 1 hour
+    await user.save();
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
+
+    const emailResult = await sendResetPasswordEmail(user, resetUrl);
+
+    res.json({
+      message: 'Password reset link has been sent to your email address.',
+      resetToken: process.env.NODE_ENV !== 'production' ? resetToken : undefined
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Reset Password - Update Password with Token
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    if (!password || password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpire: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired password reset token' });
+    }
+
+    // Update password
+    user.password = password;
+    user.resetPasswordToken = '';
+    user.resetPasswordExpire = null;
+    await user.save();
+
+    res.json({ message: 'Password updated successfully! You can now log in with your new password.' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
